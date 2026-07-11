@@ -1,0 +1,65 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# ========================
+# Node.js / Frontend
+# ========================
+node_modules/
+webui/node_modules/
+webui/dist/
+
+# ========================
+# Environment & Secrets
+# ========================
+.env
+.env.local
+.env.*.local
+
+# ========================
+# Agent / Internal
+# ========================
+.agent/PLAN.MD
+
+# ========================
+# IDE & Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Testing & Cache
+# ========================
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.cover
+
+# ========================
+# Backup (optional local)
+# ========================
+backup/

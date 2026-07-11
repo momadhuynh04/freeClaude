@@ -1,0 +1,7 @@
+{
+  "model_mappings": {
+    "opus": "openrouter/qwen/qwen3.7-plus",
+    "sonnet": "deepseekplatform/deepseek-v4-flash",
+    "haiku": "deepseekplatform/deepseek-v4-pro"
+  }
+}
