@@ -9,6 +9,7 @@
     <img src="https://img.shields.io/badge/Testing-PyTest-brightgreen.svg" alt="PyTest">
     <img src="https://img.shields.io/badge/Streaming-SSE-orange.svg" alt="SSE Streaming">
     <img src="https://img.shields.io/badge/Platform-Windows-0078D6.svg" alt="Windows">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   </p>
 
   <p>An intelligent proxy server that seamlessly re-routes Claude Code CLI and VSCode Claude extensions to alternative LLM providers like OpenRouter and DeepSeek. Manage everything through a beautiful integrated Web UI dashboard.</p>
@@ -401,3 +402,11 @@ freeClaude/
 ├── start.bat                       # One-click production launcher (Windows)
 └── dev.bat                         # One-click development launcher (Windows)
 ```
+
+---
+
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+Copyright © 2026 [huynhhoang04](https://github.com/momadhuynh04)
