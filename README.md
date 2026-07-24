@@ -1,4 +1,6 @@
 <div align="center">
+  <img src="webui/public/webicon.jpg" alt="freeClaude" width="128" style="border-radius: 24px; margin-bottom: 16px;" />
+
   <h1>freeClaude</h1>
   <h3><strong>Unlock the Power of Claude Code CLI — Free & Flexible!</strong></h3>
 
@@ -8,7 +10,7 @@
     <img src="https://img.shields.io/badge/Frontend-React%20%2B%20Tailwind-61DAFB.svg" alt="React">
     <img src="https://img.shields.io/badge/Testing-PyTest-brightgreen.svg" alt="PyTest">
     <img src="https://img.shields.io/badge/Streaming-SSE-orange.svg" alt="SSE Streaming">
-    <img src="https://img.shields.io/badge/Platform-Windows-0078D6.svg" alt="Windows">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg" alt="Cross-platform">
     <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   </p>
 
@@ -216,13 +218,16 @@ cd ..
 
 **6. Launch everything**
 
-Use the included batch scripts for a one-click start:
-```bash
-# Production mode (serves built WebUI on port 8082)
-start.bat
+Use the included scripts for a one-click start:
 
-# Development mode (Backend :8082 + Vite HMR :5173)
-dev.bat
+```bash
+# Windows (Command Prompt)
+start.bat          # Production mode (serves built WebUI on port 8082)
+dev.bat            # Development mode (Backend :8082 + Vite HMR :5173)
+
+# Linux / macOS (Terminal)
+./start.sh         # Production mode (serves built WebUI on port 8082)
+./dev.sh           # Development mode (Backend :8082 + Vite HMR :5173)
 ```
 
 Or start the server manually:
@@ -240,9 +245,9 @@ Once the proxy server is running:
 2. Select your **Target Provider** (OpenRouter or DeepSeek) from the dropdown.
 3. Pick the **target model** you want Claude Code to use as its engine.
 4. Map it to a Claude model tier (Opus / Sonnet / Haiku) via the dashboard.
-5. Click **Launch Project**, select your working directory, and a new terminal will open with Claude Code already connected to your proxy.
+5. Click **Launch Project**, select your working directory, and a new terminal window will open with Claude Code already connected to your proxy.
 
-Under the hood, the WebUI sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8082` and `ANTHROPIC_API_KEY=freeClaude`, then launches `claude` in that environment. All Anthropic SDK traffic is intercepted and translated transparently.
+Under the hood, the WebUI sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8082` and `ANTHROPIC_API_KEY=freeClaude`, then launches `claude` in a new terminal (uses `cmd` on Windows, or auto-detects your terminal emulator on Linux/macOS — gnome-terminal, konsole, xterm, alacritty, kitty, and more). All Anthropic SDK traffic is intercepted and translated transparently.
 
 ---
 
@@ -276,12 +281,19 @@ You can also change mappings live through the Web UI dashboard — changes are p
 
 ### Running the Dev Environment
 
-The project ships with a `dev.bat` script that starts both the backend and frontend in development mode with hot-reload:
+The project ships with scripts that start both the backend and frontend in development mode with hot-reload:
 
 ```bash
+# Windows
 dev.bat
-# Backend API   → http://127.0.0.1:8082  (uvicorn with auto-reload)
-# Frontend UI   → http://localhost:5173   (Vite HMR)
+
+# Linux / macOS
+./dev.sh
+```
+
+```
+Backend API   → http://127.0.0.1:8082  (uvicorn with auto-reload)
+Frontend UI   → http://localhost:5173   (Vite HMR)
 ```
 
 ### Running Tests
@@ -290,7 +302,11 @@ The project includes a comprehensive test suite with **29 test cases** across 8 
 
 ```bash
 # Activate your venv first
+# Windows
 venv\Scripts\activate
+
+# Linux / macOS
+source venv/bin/activate
 
 # Run all tests
 python -m pytest test/ -v
@@ -399,8 +415,8 @@ freeClaude/
 ├── .env.example                    # Environment config template
 ├── config.json                     # Persisted model mappings (managed by WebUI)
 ├── requirements.txt                # Python dependencies
-├── start.bat                       # One-click production launcher (Windows)
-└── dev.bat                         # One-click development launcher (Windows)
+├── start.bat / start.sh            # One-click production launcher (Windows / Linux & macOS)
+└── dev.bat / dev.sh                # One-click development launcher (Windows / Linux & macOS)
 ```
 
 ---

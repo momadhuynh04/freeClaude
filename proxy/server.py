@@ -5,6 +5,9 @@ import httpx
 from typing import Optional
 import subprocess
 import urllib.parse
+import platform
+import shutil
+import sys
 
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -13,6 +16,55 @@ import os
 from models.anthropic import AnthropicRequest
 from proxy.router import provider_router
 from config.model_map import model_mapper
+
+def _find_linux_terminal():
+    terminals = [
+        "gnome-terminal", "konsole", "xfce4-terminal", "lxterminal",
+        "alacritty", "kitty", "foot", "terminology", "xterm"
+    ]
+    for term in terminals:
+        if shutil.which(term):
+            return term
+    return None
+
+def _launch_terminal(cmd, cwd):
+    system = platform.system()
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8082"
+    env["ANTHROPIC_API_KEY"] = "freeClaude"
+
+    if system == "Windows":
+        return subprocess.Popen(
+            f'start cmd /k "{cmd}"',
+            shell=True, cwd=cwd, env=env
+        )
+    elif system == "Linux":
+        terminal = _find_linux_terminal()
+        if not terminal:
+            raise RuntimeError("No terminal emulator found. Install gnome-terminal, konsole, xterm, etc.")
+
+        if terminal == "gnome-terminal":
+            term_cmd = [terminal, "--working-directory", cwd, "--", "bash", "-c", f"{cmd}; exec bash"]
+        elif terminal == "konsole":
+            term_cmd = [terminal, "--workdir", cwd, "-e", "bash", "-c", f"{cmd}; exec bash"]
+        elif terminal == "kitty":
+            term_cmd = [terminal, "--directory", cwd, "bash", "-c", f"{cmd}; exec bash"]
+        elif terminal == "alacritty":
+            term_cmd = [terminal, "--working-directory", cwd, "-e", "bash", "-c", f"{cmd}; exec bash"]
+        elif terminal == "foot":
+            term_cmd = [terminal, "--working-directory", cwd, "bash", "-c", f"{cmd}; exec bash"]
+        else:
+            term_cmd = [terminal, "-e", f"bash -c 'cd {cwd} && {cmd}; exec bash'"]
+
+        return subprocess.Popen(term_cmd, env=env, start_new_session=True)
+    else:
+        escaped_cwd = cwd.replace('"', '\\"')
+        escaped_cmd = cmd.replace('"', '\\"')
+        apple_script = f'tell app "Terminal" to do script "cd \\"{escaped_cwd}\\"; {escaped_cmd}"'
+        return subprocess.Popen(
+            ["osascript", "-e", apple_script],
+            env=env
+        )
 
 app = FastAPI(title="freeClaude Proxy")
 
@@ -91,47 +143,52 @@ async def update_model(request: ModelMappingRequest):
 @app.post("/api/launch")
 async def launch_claude(request: LaunchRequest):
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    target_cwd = base_dir # Default
-    
+    target_cwd = base_dir
+
     if request.repo_url:
-        # Create projects dir
         projects_dir = os.path.join(base_dir, "projects")
         os.makedirs(projects_dir, exist_ok=True)
-        
-        # Get repo name from url
+
         parsed_url = urllib.parse.urlparse(request.repo_url)
         path_parts = parsed_url.path.strip("/").split("/")
         repo_name = path_parts[-1] if path_parts else "repo"
         if repo_name.endswith(".git"):
             repo_name = repo_name[:-4]
-            
+
         repo_path = os.path.join(projects_dir, repo_name)
-        
-        if not os.path.exists(repo_path):
-            pass
-            
-        target_cwd = projects_dir
-        # Command to run in new window: git clone -> cd repo -> claude
-        cmd_str = f'start cmd /k "if not exist "{repo_name}" git clone {request.repo_url} && cd "{repo_name}" && claude"'
+
+        if os.path.exists(repo_path):
+            cmd = f'cd "{repo_path}" && claude'
+        else:
+            cmd = f'cd "{projects_dir}" && git clone {request.repo_url} && cd "{repo_name}" && claude'
     else:
         if request.path and os.path.isdir(request.path):
             target_cwd = request.path
-        cmd_str = 'start cmd /k "claude"'
+        cmd = "claude"
 
-    # Set up environment variables
-    env = os.environ.copy()
-    env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8082"
-    env["ANTHROPIC_API_KEY"] = "freeClaude"
-    
     try:
-        subprocess.Popen(cmd_str, shell=True, cwd=target_cwd, env=env)
+        _launch_terminal(cmd, target_cwd)
         return {"status": "success", "message": "Launched Claude Code!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/browse-folder")
 async def browse_folder():
-    """Opens a native Windows folder picker dialogue."""
+    system = platform.system()
+
+    if system == "Linux":
+        for picker in ["zenity", "kdialog", "yad"]:
+            if shutil.which(picker):
+                try:
+                    result = subprocess.run(
+                        [picker, "--directory", "--title=Select Project Folder", f"--filename={os.path.expanduser('~')}/"],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    path = result.stdout.strip()
+                    return {"path": path}
+                except Exception:
+                    pass
+
     script = '''
 import tkinter as tk
 from tkinter import filedialog
@@ -141,7 +198,7 @@ root.attributes('-topmost', True)
 print(filedialog.askdirectory(parent=root, title="Select Project Folder"))
 '''
     try:
-        result = subprocess.run(["python", "-c", script], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
         path = result.stdout.strip()
         return {"path": path}
     except Exception as e:

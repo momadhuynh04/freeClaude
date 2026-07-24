@@ -341,7 +341,7 @@ function App() {
                       type="text" 
                       value={localPath}
                       onChange={e => setLocalPath(e.target.value)}
-                      placeholder="e.g. C:\Users\Projects\MyApp or left blank to open in proxy folder" 
+                      placeholder="e.g. /home/user/projects/myapp or leave blank to open in proxy folder" 
                       className="flex-1 bg-[#13131a] border border-white/10 rounded-xl px-5 py-4 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all placeholder:text-gray-600 font-mono text-sm"
                     />
                     <button 
@@ -359,9 +359,9 @@ function App() {
                       Browse...
                     </button>
                   </div>
-                  <p className="text-xs text-gray-500 mb-6 mt-2 flex items-center gap-2">
+                    <p className="text-xs text-gray-500 mb-6 mt-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    A new command prompt window will open at this location with Claude loaded.
+                    A new terminal window will open at this location with Claude loaded.
                   </p>
                 </div>
               ) : (
