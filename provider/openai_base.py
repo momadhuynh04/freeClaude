@@ -151,7 +151,7 @@ class OpenAIBaseProvider(BaseProvider):
 
         # Map Anthropic thinking → OpenAI reasoning_effort
         if anthropic_request.thinking and anthropic_request.thinking.type == "enabled":
-            budget = anthropic_request.thinking.budget_tokens
+            budget = anthropic_request.thinking.budget_tokens or 4000
             if budget > 16000:
                 body["reasoning_effort"] = "xhigh"
             elif budget > 8000:

@@ -13,7 +13,7 @@ class Message(BaseModel):
 
 class Thinking(BaseModel):
     type: str = "enabled"
-    budget_tokens: int
+    budget_tokens: Optional[int] = None
     model_config = {"extra": "allow"}
 
 class AnthropicRequest(BaseModel):
