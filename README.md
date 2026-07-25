@@ -275,38 +275,118 @@ class MyProvider(OpenAIBaseProvider):
 
 ---
 
+---
+
 ## Architecture
 
-### Request Flow
+### High-Level Request Flow
 
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code CLI
+    participant FP as freeClaude Proxy<br/>(FastAPI :8082)
+    participant MM as ModelMapper
+    participant PR as ProviderRouter
+    participant PA as Provider Adapter
+    participant API as LLM API<br/>(OpenRouter / DeepSeek)
+
+    CC->>FP: POST /v1/messages<br/>(Anthropic format)
+    FP->>MM: resolve(model_name)
+    MM-->>FP: (provider, target_model)
+    FP->>PR: get_provider(model_name)
+    PR-->>FP: ProviderAdapter instance
+    FP->>PA: translate_request(anthropic_req)
+    PA-->>FP: provider-native body
+    FP->>PA: stream(body) / generate(body)
+    PA->>API: HTTP POST (provider format)
+    API-->>PA: Response / SSE stream
+    PA-->>FP: Anthropic SSE events
+    FP-->>CC: SSE stream (Anthropic format)
 ```
-Claude Code (CLI or Extension)
-       │  POST /v1/messages (Anthropic format)
-       ▼
-freeClaude Proxy (FastAPI :8082)
-       │
-       ├── ModelMapper: resolve model → (provider, target_model)
-       │
-       ├── ProviderRouter: instantiate adapter
-       │
-       ▼
-Provider Adapter (OpenRouter / DeepSeek)
-       │  Translate + stream
-       ▼
-LLM API (OpenRouter / DeepSeek)
-       │  Response / SSE stream
-       ▼
-Translated back to Anthropic format → Claude Code
+
+### Class Hierarchy
+
+```mermaid
+classDiagram
+    class BaseProvider {
+        <<abstract>>
+        +target_model: str
+        +translate_request(AnthropicRequest) Dict
+        +translate_response(Dict) AnthropicResponse
+        +stream(Dict) AsyncIterator~SSEEvent~
+        +generate(Dict) AnthropicResponse
+    }
+
+    class OpenAIBaseProvider {
+        +base_url: str
+        +api_key: str
+        +_get_headers() Dict
+        +translate_request(AnthropicRequest) Dict
+        +translate_response(Dict) AnthropicResponse
+        +stream(Dict) AsyncIterator~SSEEvent~
+        +generate(Dict) AnthropicResponse
+    }
+
+    class OpenRouterProvider {
+        +_get_headers() Dict
+    }
+
+    class DeepSeekProvider {
+        +api_key: str
+        +base_url: str
+        +_get_headers() Dict
+        +translate_request(AnthropicRequest) Dict
+        +translate_response(Dict) AnthropicResponse
+        +stream(Dict) AsyncIterator~SSEEvent~
+        +generate(Dict) AnthropicResponse
+    }
+
+    class ProviderRouter {
+        +get_provider(model: str) BaseProvider
+    }
+
+    class ModelMapper {
+        +mappings: Dict
+        +resolve(model: str) Tuple
+        +set_mapping(source, target)
+        +load_mappings()
+        +save_mappings()
+    }
+
+    BaseProvider <|-- OpenAIBaseProvider
+    BaseProvider <|-- DeepSeekProvider
+    OpenAIBaseProvider <|-- OpenRouterProvider
+    ProviderRouter --> BaseProvider : creates
+    ProviderRouter --> ModelMapper : uses
 ```
 
-### Key Design Decisions
+### Data Translation Pipeline
 
-| Decision | Rationale |
-| -------- | --------- |
-| **DeepSeek uses Anthropic beta endpoint** | Native `/anthropic/v1/messages` passthrough — no translation needed. |
-| **OpenRouter uses OpenAI translation** | Full Anthropic → OpenAI → Anthropic round-trip with tool calls and streaming. |
-| **`toolu_` prefix management** | Stripped when sending to OpenAI, re-added when translating responses back. |
-| **IDE auto-config** | Safe JSON merge — never overwrites user settings, only adds proxy keys. |
+```mermaid
+flowchart LR
+    subgraph "Anthropic Format (Claude Code)"
+        A1["AnthropicRequest<br/>messages, tools, system"]
+        A2["AnthropicResponse<br/>content, tool_use, usage"]
+        A3["SSE Events<br/>message_start, content_block_delta, ..."]
+    end
+
+    subgraph "OpenAI Format (OpenRouter)"
+        O1["ChatCompletions Request<br/>messages, functions, system"]
+        O2["ChatCompletions Response<br/>choices, tool_calls, usage"]
+        O3["SSE Chunks<br/>delta.content, delta.tool_calls"]
+    end
+
+    subgraph "Anthropic Beta (DeepSeek)"
+        D1["Native Passthrough<br/>(no translation needed)"]
+    end
+
+    A1 -- "OpenAIBaseProvider<br/>translate_request()" --> O1
+    O2 -- "OpenAIBaseProvider<br/>translate_response()" --> A2
+    O3 -- "OpenAIBaseProvider<br/>stream()" --> A3
+
+    A1 -- "DeepSeekProvider<br/>passthrough" --> D1
+    D1 -- "Native response" --> A2
+```
 
 ---
 
