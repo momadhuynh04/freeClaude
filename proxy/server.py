@@ -351,23 +351,16 @@ async def browse_folder():
 
         def _run_win_picker():
             try:
-                ps_script = '''
-Add-Type -AssemblyName System.Windows.Forms
-$folder = [System.Windows.Forms.FolderBrowserDialog]::new()
-$folder.Description = "Select Project Folder"
-$folder.ShowNewFolderButton = $true
-if ($folder.ShowDialog() -eq "OK") { $folder.SelectedPath }
-'''
-                result = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_script],
-                    capture_output=True, text=True, timeout=30
-                )
-                path = result.stdout.strip()
-                if path:
-                    return path
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes('-topmost', True)
+                path = filedialog.askdirectory(parent=root, title="Select Project Folder")
+                root.destroy()
+                return path if path else None
             except Exception:
-                pass
-            return None
+                return None
 
         def _run_tkinter_picker():
             script = '''
