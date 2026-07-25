@@ -113,9 +113,11 @@ def test_ide_launch_missing_editor():
     assert response.status_code == 404
 
 
+@patch("proxy.server._detect_ides")
 @patch("proxy.server._launch_ide")
-def test_ide_launch_vscode(mock_launch):
+def test_ide_launch_vscode(mock_launch, mock_detect):
     """Launch VS Code calls _launch_ide with correct binary and cwd."""
+    mock_detect.return_value = {"vscode": {"binary": "/fake/code", "name": "VS Code"}}
     response = client.post("/api/ide-launch", json={
         "editor": "vscode",
         "path": None
@@ -128,9 +130,11 @@ def test_ide_launch_vscode(mock_launch):
     assert "code" in args[0]
 
 
+@patch("proxy.server._detect_ides")
 @patch("proxy.server._launch_ide")
-def test_ide_launch_with_path(mock_launch):
+def test_ide_launch_with_path(mock_launch, mock_detect):
     """Launch with explicit path passes it to launcher."""
+    mock_detect.return_value = {"vscode": {"binary": "/fake/code", "name": "VS Code"}}
     test_path = "/tmp/test_project"
     os.makedirs(test_path, exist_ok=True)
 
