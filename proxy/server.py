@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import os
 import json
 import datetime
+import asyncio
 
 from models.anthropic import AnthropicRequest
 from proxy.router import provider_router
@@ -327,48 +328,49 @@ async def launch_claude(request: LaunchRequest):
 
 @app.get("/api/browse-folder")
 async def browse_folder():
-    system = platform.system()
+    try:
+        system = platform.system()
 
-    if system == "Linux":
-        for picker in ["zenity", "kdialog", "yad"]:
-            if shutil.which(picker):
-                try:
-                    if picker == "zenity":
-                        cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
-                    elif picker == "yad":
-                        cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
-                    else:
-                        cmd = [picker, "--getexistingdirectory", "--title=Select Project Folder"]
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True, text=True, timeout=30
-                    )
-                    path = result.stdout.strip()
-                    if path:
-                        return {"path": path}
-                except Exception:
-                    pass
+        def _run_linux_picker():
+            for picker in ["zenity", "kdialog", "yad"]:
+                if shutil.which(picker):
+                    try:
+                        if picker == "zenity":
+                            cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
+                        elif picker == "yad":
+                            cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
+                        else:
+                            cmd = [picker, "--getexistingdirectory", "--title=Select Project Folder"]
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                        path = result.stdout.strip()
+                        if path:
+                            return path
+                    except Exception:
+                        pass
+            return None
 
-    if system == "Windows":
-        try:
-            ps_script = '''
+        def _run_win_picker():
+            try:
+                ps_script = '''
 Add-Type -AssemblyName System.Windows.Forms
 $folder = [System.Windows.Forms.FolderBrowserDialog]::new()
 $folder.Description = "Select Project Folder"
 $folder.ShowNewFolderButton = $true
 if ($folder.ShowDialog() -eq "OK") { $folder.SelectedPath }
 '''
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script],
-                capture_output=True, text=True, timeout=30
-            )
-            path = result.stdout.strip()
-            if path:
-                return {"path": path}
-        except Exception:
-            pass
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_script],
+                    capture_output=True, text=True, timeout=30
+                )
+                path = result.stdout.strip()
+                if path:
+                    return path
+            except Exception:
+                pass
+            return None
 
-    script = '''
+        def _run_tkinter_picker():
+            script = '''
 import tkinter as tk
 from tkinter import filedialog
 root = tk.Tk()
@@ -376,12 +378,29 @@ root.withdraw()
 root.attributes('-topmost', True)
 print(filedialog.askdirectory(parent=root, title="Select Project Folder"))
 '''
-    try:
-        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-        path = result.stdout.strip()
-        return {"path": path}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            try:
+                result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+                return result.stdout.strip()
+            except Exception:
+                return None
+
+        if system == "Linux":
+            path = await asyncio.to_thread(_run_linux_picker)
+            if path:
+                return {"path": path}
+
+        if system == "Windows":
+            path = await asyncio.to_thread(_run_win_picker)
+            if path:
+                return {"path": path}
+
+        path = await asyncio.to_thread(_run_tkinter_picker)
+        if path:
+            return {"path": path}
+    except Exception:
+        pass
+
+    return {"path": ""}
 
 @app.post("/v1/messages")
 async def handle_messages(request: AnthropicRequest):
@@ -432,7 +451,7 @@ async def handle_messages(request: AnthropicRequest):
             content={"type": "error", "error": {"type": "api_error", "message": error_msg}}
         )
 
-@app.get("/api/hello")
+@app.api_route("/api/hello", methods=["GET", "HEAD"])
 async def api_hello():
     return {"message": "freeClaude proxy is running"}
 
