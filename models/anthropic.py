@@ -11,6 +11,11 @@ class Message(BaseModel):
     role: str
     content: Union[str, List[Dict[str, Any]]]
 
+class Thinking(BaseModel):
+    type: str = "enabled"
+    budget_tokens: int
+    model_config = {"extra": "allow"}
+
 class AnthropicRequest(BaseModel):
     model: str
     messages: List[Message]
@@ -24,6 +29,7 @@ class AnthropicRequest(BaseModel):
     top_k: Optional[int] = None
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Dict[str, Any]] = None
+    thinking: Optional[Thinking] = None
     
     model_config = {"extra": "allow"}
 

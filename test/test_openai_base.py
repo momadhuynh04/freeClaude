@@ -6,7 +6,7 @@ from provider.openai_base import (
     _openai_tool_calls_to_anthropic,
     OpenAIBaseProvider
 )
-from models.anthropic import AnthropicRequest, Message
+from models.anthropic import AnthropicRequest, Message, Thinking
 
 # ----------------------------------------
 # 1. Test Content Conversion Methods
@@ -204,3 +204,102 @@ async def test_generate_api_error(mock_post):
     
     with pytest.raises(httpx.HTTPStatusError):
         await provider.generate({"messages": []})
+
+# ----------------------------------------
+# 9. Reasoning Effort Mapping (thinking → reasoning_effort)
+# ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_thinking_to_reasoning_effort_xhigh():
+    """budget_tokens > 16000 → xhigh"""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")],
+        thinking=Thinking(type="enabled", budget_tokens=20000)
+    )
+    body = await provider.translate_request(req)
+    assert "reasoning_effort" in body
+    assert body["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_thinking_to_reasoning_effort_high():
+    """budget_tokens 8001–16000 → high"""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")],
+        thinking=Thinking(type="enabled", budget_tokens=10000)
+    )
+    body = await provider.translate_request(req)
+    assert body["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_thinking_to_reasoning_effort_medium():
+    """budget_tokens 2001–8000 → medium"""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")],
+        thinking=Thinking(type="enabled", budget_tokens=4000)
+    )
+    body = await provider.translate_request(req)
+    assert body["reasoning_effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_thinking_to_reasoning_effort_low():
+    """budget_tokens ≤ 2000 → low"""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")],
+        thinking=Thinking(type="enabled", budget_tokens=1000)
+    )
+    body = await provider.translate_request(req)
+    assert body["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_no_thinking_no_reasoning_effort():
+    """Without thinking, reasoning_effort should NOT be in body."""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")]
+    )
+    body = await provider.translate_request(req)
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_thinking_disabled_no_reasoning_effort():
+    """thinking type='disabled' should NOT add reasoning_effort."""
+    provider = OpenAIBaseProvider(base_url="http://test", api_key="test", target_model="test")
+    req = AnthropicRequest(
+        model="claude-sonnet-4-5",
+        messages=[Message(role="user", content="test")],
+        thinking=Thinking(type="disabled", budget_tokens=4000)
+    )
+    body = await provider.translate_request(req)
+    assert "reasoning_effort" not in body
+
+
+# ----------------------------------------
+# 10. AnthropicRequest with thinking field
+# ----------------------------------------
+
+def test_anthropic_request_with_thinking():
+    """AnthropicRequest correctly parses thinking field."""
+    payload = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "thinking": {"type": "enabled", "budget_tokens": 4000}
+    }
+    req = AnthropicRequest(**payload)
+    assert req.thinking is not None
+    assert req.thinking.type == "enabled"
+    assert req.thinking.budget_tokens == 4000
+

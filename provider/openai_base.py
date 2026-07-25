@@ -149,6 +149,18 @@ class OpenAIBaseProvider(BaseProvider):
         if anthropic_request.temperature is not None:
             body["temperature"] = anthropic_request.temperature
 
+        # Map Anthropic thinking → OpenAI reasoning_effort
+        if anthropic_request.thinking and anthropic_request.thinking.type == "enabled":
+            budget = anthropic_request.thinking.budget_tokens
+            if budget > 16000:
+                body["reasoning_effort"] = "xhigh"
+            elif budget > 8000:
+                body["reasoning_effort"] = "high"
+            elif budget > 2000:
+                body["reasoning_effort"] = "medium"
+            else:
+                body["reasoning_effort"] = "low"
+
         # Tool definitions
         if anthropic_request.tools:
             body["tools"] = _anthropic_tools_to_openai(anthropic_request.tools)
