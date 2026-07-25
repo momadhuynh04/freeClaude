@@ -3,7 +3,10 @@ import os
 from typing import Dict, Tuple
 
 class ModelMapper:
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = None):
+        if config_path is None:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            config_path = os.path.join(base_dir, "config.json")
         self.config_path = config_path
         self.mappings: Dict[str, str] = {}
         self.load_mappings()

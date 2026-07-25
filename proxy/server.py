@@ -12,10 +12,105 @@ import sys
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
+import json
+import datetime
 
 from models.anthropic import AnthropicRequest
 from proxy.router import provider_router
 from config.model_map import model_mapper
+
+IDE_DEFINITIONS = [
+    {"id": "vscode", "name": "VS Code", "binary": "code", "config_dir": "Code", "supports_claude_extension": True},
+    {"id": "vscodium", "name": "VSCodium", "binary": "codium", "config_dir": "VSCodium", "supports_claude_extension": True},
+    {"id": "cursor", "name": "Cursor", "binary": "cursor", "config_dir": "Cursor", "supports_claude_extension": True},
+]
+
+def _detect_ides():
+    detected = {}
+    for ide in IDE_DEFINITIONS:
+        binary_path = shutil.which(ide["binary"])
+        if binary_path:
+            version = ""
+            try:
+                result = subprocess.run([binary_path, "--version"], capture_output=True, text=True, timeout=5)
+                version = result.stdout.strip().split("\n")[0] if result.returncode == 0 else ""
+            except Exception:
+                pass
+            detected[ide["id"]] = {
+                "binary": binary_path,
+                "version": version,
+                "name": ide["name"],
+                "config_dir": ide["config_dir"],
+                "supports_claude_extension": ide["supports_claude_extension"],
+                "last_detected": datetime.datetime.now().isoformat()
+            }
+    return detected
+
+def _save_ide_detection(detected):
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+    data = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                pass
+    data["ide_detected"] = detected
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def _get_ide_settings_path(config_dir):
+    system = platform.system()
+    home = os.path.expanduser("~")
+    if system == "Linux":
+        return os.path.join(home, ".config", config_dir, "User", "settings.json")
+    elif system == "Windows":
+        return os.path.join(os.environ.get("APPDATA", ""), config_dir, "User", "settings.json")
+    else:
+        return os.path.join(home, "Library", "Application Support", config_dir, "User", "settings.json")
+
+def _safe_merge_json(filepath, updates):
+    data = {}
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                pass
+    changed = False
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(data.get(key), dict):
+            for sub_key, sub_value in value.items():
+                if data[key].get(sub_key) != sub_value:
+                    data[key][sub_key] = sub_value
+                    changed = True
+        else:
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+    if changed:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    return changed
+
+def _setup_claude_env():
+    claude_settings_path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+    return _safe_merge_json(claude_settings_path, {
+        "env": {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082",
+            "ANTHROPIC_API_KEY": "freeClaude"
+        }
+    })
+
+def _setup_ide_settings(config_dir):
+    settings_path = _get_ide_settings_path(config_dir)
+    return _safe_merge_json(settings_path, {
+        "claudeCode.disableLoginPrompt": True
+    })
+
+def _launch_ide(binary, cwd):
+    subprocess.Popen([binary, "--new-window", cwd], start_new_session=True)
 
 def _find_linux_terminal():
     terminals = [
@@ -34,8 +129,9 @@ def _launch_terminal(cmd, cwd):
     env["ANTHROPIC_API_KEY"] = "freeClaude"
 
     if system == "Windows":
+        safe_cmd = cmd.replace('"', '\\"')
         return subprocess.Popen(
-            f'start cmd /k "{cmd}"',
+            f'start "" cmd /k "{safe_cmd}"',
             shell=True, cwd=cwd, env=env
         )
     elif system == "Linux":
@@ -87,6 +183,63 @@ class ModelMappingRequest(BaseModel):
 class LaunchRequest(BaseModel):
     path: Optional[str] = None
     repo_url: Optional[str] = None
+
+class IDESetupRequest(BaseModel):
+    editors: list[str] = []
+
+class IDELaunchRequest(BaseModel):
+    editor: str
+    path: Optional[str] = None
+
+@app.get("/api/ide-detect")
+async def ide_detect():
+    detected = _detect_ides()
+    if detected:
+        _save_ide_detection(detected)
+    return {"detected": detected}
+
+@app.get("/api/ide-detect-refresh")
+async def ide_detect_refresh():
+    detected = _detect_ides()
+    _save_ide_detection(detected)
+    return {"detected": detected}
+
+@app.post("/api/ide-setup")
+async def ide_setup(request: IDESetupRequest):
+    results = []
+
+    claude_changed = _setup_claude_env()
+    results.append({"target": "claude_settings", "configured": claude_changed})
+
+    detected = _detect_ides()
+    for ide_def in IDE_DEFINITIONS:
+        if ide_def["id"] in request.editors and ide_def["id"] in detected:
+            if ide_def["supports_claude_extension"]:
+                changed = _setup_ide_settings(ide_def["config_dir"])
+                results.append({"target": ide_def["id"], "configured": changed})
+            else:
+                results.append({"target": ide_def["id"], "configured": False, "note": "IDE does not support Claude Code extension — use terminal inside this IDE with `claude` CLI instead"})
+
+    return {"status": "success", "results": results}
+
+@app.post("/api/ide-launch")
+async def ide_launch(request: IDELaunchRequest):
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_cwd = base_dir
+
+    if request.path and os.path.isdir(request.path):
+        target_cwd = request.path
+
+    detected = _detect_ides()
+    info = detected.get(request.editor)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"IDE '{request.editor}' not found. Run /api/ide-detect-refresh first.")
+
+    try:
+        _launch_ide(info["binary"], target_cwd)
+        return {"status": "success", "message": f"Launched {info['name']}!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/models")
 async def get_models():
@@ -180,14 +333,40 @@ async def browse_folder():
         for picker in ["zenity", "kdialog", "yad"]:
             if shutil.which(picker):
                 try:
+                    if picker == "zenity":
+                        cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
+                    elif picker == "yad":
+                        cmd = [picker, "--file-selection", "--directory", "--title=Select Project Folder"]
+                    else:
+                        cmd = [picker, "--getexistingdirectory", "--title=Select Project Folder"]
                     result = subprocess.run(
-                        [picker, "--directory", "--title=Select Project Folder", f"--filename={os.path.expanduser('~')}/"],
+                        cmd,
                         capture_output=True, text=True, timeout=30
                     )
                     path = result.stdout.strip()
-                    return {"path": path}
+                    if path:
+                        return {"path": path}
                 except Exception:
                     pass
+
+    if system == "Windows":
+        try:
+            ps_script = '''
+Add-Type -AssemblyName System.Windows.Forms
+$folder = [System.Windows.Forms.FolderBrowserDialog]::new()
+$folder.Description = "Select Project Folder"
+$folder.ShowNewFolderButton = $true
+if ($folder.ShowDialog() -eq "OK") { $folder.SelectedPath }
+'''
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                capture_output=True, text=True, timeout=30
+            )
+            path = result.stdout.strip()
+            if path:
+                return {"path": path}
+        except Exception:
+            pass
 
     script = '''
 import tkinter as tk
@@ -252,6 +431,44 @@ async def handle_messages(request: AnthropicRequest):
             status_code=500,
             content={"type": "error", "error": {"type": "api_error", "message": error_msg}}
         )
+
+@app.get("/api/hello")
+async def api_hello():
+    return {"message": "freeClaude proxy is running"}
+
+@app.post("/v1/messages/count_tokens")
+@app.post("/v1/messages/count_tokens/")
+async def count_tokens(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    token_count = 0
+    messages = body.get("messages", [])
+    system = body.get("system", "")
+
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            token_count += len(content.split()) * 2
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text", "")
+                    token_count += len(text.split()) * 2
+
+    if isinstance(system, str):
+        token_count += len(system.split()) * 2
+    elif isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict):
+                token_count += len(block.get("text", "").split()) * 2
+
+    if token_count == 0:
+        token_count = 100
+
+    return {"input_tokens": token_count}
 
 @app.api_route("/v1/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
 async def catch_all_v1(path_name: str, request: Request):

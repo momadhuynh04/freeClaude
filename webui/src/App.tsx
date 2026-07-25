@@ -84,10 +84,14 @@ function App() {
   const [targetModel, setTargetModel] = useState("");
   
   // Launcher Form State
-  const [launchType, setLaunchType] = useState<'local' | 'git'>('local');
+  const [launchTarget, setLaunchTarget] = useState<string>('terminal');
+  const [launchMode, setLaunchMode] = useState<'local' | 'git'>('local');
   const [localPath, setLocalPath] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [isLaunching, setIsLaunching] = useState(false);
+
+  // IDE detection state
+  const [ideList, setIdeList] = useState<Record<string, { name: string; version: string; binary: string; supports_claude_extension: boolean }>>({});
 
   // Available models state
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({
@@ -104,6 +108,13 @@ function App() {
 
   useEffect(() => {
     fetchMappings();
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/ide-detect')
+      .then(r => r.json())
+      .then(d => setIdeList(d.detected || {}))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -142,21 +153,38 @@ function App() {
 
   const launchClaude = async () => {
     setIsLaunching(true);
-    const payload = {
-      path: launchType === 'local' ? localPath : null,
-      repo_url: launchType === 'git' ? repoUrl : null
-    };
 
-    try {
-      await fetch('/api/launch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    } catch (e) {
-      console.error(e);
+    if (launchTarget === 'terminal') {
+      const payload = {
+        path: launchMode === 'local' ? localPath : null,
+        repo_url: launchMode === 'git' ? repoUrl : null
+      };
+      try {
+        await fetch('/api/launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      try {
+        await fetch('/api/ide-setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ editors: [launchTarget] })
+        });
+        await fetch('/api/ide-launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ editor: launchTarget, path: localPath || null })
+        });
+      } catch (e) {
+        console.error(e);
+      }
     }
-    setTimeout(() => setIsLaunching(false), 1000); // UI feel
+    setTimeout(() => setIsLaunching(false), 1000);
   };
 
   const currentProviderModels = availableModels[provider] || [];
@@ -315,23 +343,62 @@ function App() {
               Launch Claude Code directly with <code>ANTHROPIC_BASE_URL</code> and API keys pre-configured. Open your existing local projects or automatically clone a Git repository to start coding immediately.
             </p>
 
-            <div className="bg-black/30 p-2 rounded-2xl inline-flex mb-8 border border-white/5 relative z-10">
+            <div className="bg-black/30 p-2 rounded-2xl inline-flex mb-6 border border-white/5 relative z-10 flex-wrap gap-1">
               <button 
-                onClick={() => setLaunchType('local')}
-                className={`px-6 py-2.5 rounded-xl font-medium transition-all ${launchType === 'local' ? 'bg-white/10 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+                onClick={() => setLaunchTarget('terminal')}
+                className={`px-5 py-2.5 rounded-xl font-medium transition-all flex items-center gap-2 ${launchTarget === 'terminal' ? 'bg-white/10 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
               >
-                Local Directory
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M4 17h16a2 2 0 002-2V9a2 2 0 00-2-2H4a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
+                Terminal
               </button>
-              <button 
-                onClick={() => setLaunchType('git')}
-                className={`px-6 py-2.5 rounded-xl font-medium transition-all ${launchType === 'git' ? 'bg-white/10 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
-              >
-                Git Repository
-              </button>
+              {Object.entries(ideList).map(([id, info]) => (
+                <button 
+                  key={id}
+                  onClick={() => setLaunchTarget(id)}
+                  title={info.supports_claude_extension ? 'Auto-configure Claude Code extension' : 'Will launch IDE — use terminal inside it with `claude` CLI'}
+                  className={`px-5 py-2.5 rounded-xl font-medium transition-all ${launchTarget === id ? 'bg-cyan-500/20 text-cyan-300 shadow-md border border-cyan-500/20' : 'text-gray-400 hover:text-white'} ${!info.supports_claude_extension ? 'opacity-70' : ''}`}
+                >
+                  {info.name}{!info.supports_claude_extension ? ' *' : ''}
+                </button>
+              ))}
             </div>
 
+            {launchTarget === 'terminal' && (
+              <div className="bg-black/20 p-2 rounded-2xl inline-flex mb-6 border border-white/5 relative z-10">
+                <button 
+                  onClick={() => setLaunchMode('local')}
+                  className={`px-5 py-2 rounded-xl font-medium transition-all ${launchMode === 'local' ? 'bg-white/10 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+                >
+                  Local Directory
+                </button>
+                <button 
+                  onClick={() => setLaunchMode('git')}
+                  className={`px-5 py-2 rounded-xl font-medium transition-all ${launchMode === 'git' ? 'bg-white/10 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+                >
+                  Git Repository
+                </button>
+              </div>
+            )}
+
             <div className="bg-black/40 p-8 rounded-2xl border border-white/10 relative z-10 shadow-inner max-w-3xl">
-              {launchType === 'local' ? (
+              {launchTarget === 'terminal' && launchMode === 'git' ? (
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest">
+                    Git Repository URL
+                  </label>
+                  <input 
+                    type="text" 
+                    value={repoUrl}
+                    onChange={e => setRepoUrl(e.target.value)}
+                    placeholder="e.g. https://github.com/facebook/react.git" 
+                    className="w-full bg-[#13131a] border border-white/10 rounded-xl px-5 py-4 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all placeholder:text-gray-600 mb-2 font-mono text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mb-6 mt-2 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    Repo will be cloned to `freeClaude/projects/` and Claude will open automatically.
+                  </p>
+                </div>
+              ) : (
                 <div>
                   <label className="block text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest">
                     Project Folder Path
@@ -359,43 +426,26 @@ function App() {
                       Browse...
                     </button>
                   </div>
-                    <p className="text-xs text-gray-500 mb-6 mt-2 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    A new terminal window will open at this location with Claude loaded.
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest">
-                    Git Repository URL
-                  </label>
-                  <input 
-                    type="text" 
-                    value={repoUrl}
-                    onChange={e => setRepoUrl(e.target.value)}
-                    placeholder="e.g. https://github.com/facebook/react.git" 
-                    className="w-full bg-[#13131a] border border-white/10 rounded-xl px-5 py-4 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all placeholder:text-gray-600 mb-2 font-mono text-sm"
-                  />
                   <p className="text-xs text-gray-500 mb-6 mt-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    Repo will be cloned to `freeClaude/projects/` and Claude will open automatically.
+                    {launchTarget === 'terminal' ? 'A new terminal window will open at this location with Claude loaded.' : ideList[launchTarget]?.supports_claude_extension ? `${ideList[launchTarget]?.name || 'IDE'} will open with Claude Code pre-configured.` : `${ideList[launchTarget]?.name || 'IDE'} will open. Use the built-in terminal and run \`claude\` — proxy env is already configured.`}
                   </p>
                 </div>
               )}
 
               <button 
                 onClick={launchClaude}
-                disabled={isLaunching || (launchType === 'git' && !repoUrl)}
+                disabled={isLaunching || (launchTarget === 'terminal' && launchMode === 'git' && !repoUrl)}
                 className="w-full sm:w-auto flex items-center justify-center gap-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-gray-700 disabled:to-gray-800 text-white font-bold py-4 px-10 rounded-xl transition-all shadow-[0_0_20px_rgba(8,145,178,0.3)] hover:shadow-[0_0_30px_rgba(8,145,178,0.5)] active:scale-95 border border-cyan-500/30 text-lg group"
               >
                 {isLaunching ? (
                   <>
                     <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Launching Terminal...
+                    Launching...
                   </>
                 ) : (
                   <>
-                    Launch Claude Code
+                    {launchTarget === 'terminal' ? 'Launch Claude Code' : `Launch in ${ideList[launchTarget]?.name || 'IDE'}`}
                     <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                   </>
                 )}

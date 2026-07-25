@@ -17,8 +17,7 @@ echo [*] Khoi dong Backend Proxy (Port 8082)...
 start "freeClaude Backend DEV" cmd /k "title Backend API & color 0a & call venv\Scripts\activate.bat & python -m cli.main"
 
 echo [*] Khoi dong Frontend Vite (Port 5173)...
-cd webui
-start "freeClaude Frontend DEV" cmd /k "title Frontend UI & color 0d & npm run dev"
+start "freeClaude Frontend DEV" cmd /k "title Frontend UI & color 0d & cd webui && npm run dev"
 
 echo [*] Cho cac service len sóng...
 timeout /t 3 /nobreak > nul
