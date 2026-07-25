@@ -130,9 +130,11 @@ def _launch_terminal(cmd, cwd):
     env["ANTHROPIC_API_KEY"] = "freeClaude"
 
     if system == "Windows":
-        safe_cmd = cmd.replace('"', '\\"')
+        import base64
+        ps_cmd = cmd.replace('&&', ';')
+        encoded = base64.b64encode(ps_cmd.encode('utf-16-le')).decode('ascii')
         return subprocess.Popen(
-            f'start "" cmd /k "{safe_cmd}"',
+            f'start "" powershell -NoExit -EncodedCommand {encoded}',
             shell=True, cwd=cwd, env=env
         )
     elif system == "Linux":
