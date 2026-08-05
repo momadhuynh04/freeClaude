@@ -250,8 +250,10 @@ def test_api_hello():
 # 6. Browse Folder Endpoint
 # ----------------------------------------
 
-def test_browse_folder_returns_path():
+@patch("proxy.server.platform")
+def test_browse_folder_returns_path(mock_platform):
     """Browse folder endpoint returns a path field (may be empty if no GUI)."""
+    mock_platform.system.return_value = "Headless"
     response = client.get("/api/browse-folder")
     assert response.status_code == 200
     data = response.json()
