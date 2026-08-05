@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="webui/public/webicon.jpg" alt="freeClaude" width="128" style="border-radius: 24px; margin-bottom: 16px;" />
 
   <h1>freeClaude</h1>
   <h3><strong>Unlock Claude Code — Free & Flexible</strong></h3>
