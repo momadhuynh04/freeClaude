@@ -27,11 +27,11 @@
 
   <br/>
 
-  ![WebUI Dashboard](preview1.png)
+  ![WebUI Dashboard](previewui.png)
   <br/>
   <i>WebUI Dashboard — Model routing, IDE detection, one-click launch</i>
   <br/><br/>
-  ![Claude Code Proxy](preview2.png)
+  ![Claude Code Proxy](previewuse.png)
   <br/>
   <i>Claude Code CLI running through freeClaude proxy with a DeepSeek backend</i>
 </div>
@@ -153,6 +153,19 @@ In the **Launcher** tab, you can choose between:
 | **VS Code / VSCodium / Cursor** | Auto-detected from your system. One click: sets up `~/.claude/settings.json`, configures the IDE's `disableLoginPrompt`, and opens the IDE in your project folder. |
 
 For IDE launches, the Claude Code extension picks up the proxy settings automatically from `~/.claude/settings.json` — no manual configuration needed.
+
+> **IDE not showing up?** freeClaude detects IDEs by scanning your system `PATH`. If an IDE was installed but doesn't appear:
+> 1. Check if the binary is in `PATH`:
+>    - **Windows**: `where code` or `where cursor`
+>    - **Linux / macOS**: `echo $PATH` — then `which code` or `which cursor`
+> 2. If missing, add its directory to `PATH`:
+>    - **Windows**: `setx PATH "%PATH%;C:\path\to\ide"` (or via System Properties → Environment Variables)
+>    - **Linux / macOS**: `export PATH="$PATH:/path/to/ide"` (add to `~/.bashrc` or `~/.zshrc` for permanent)
+> 3. Run the refresh script again:
+>    - **Windows**: `detect-ide.bat`
+>    - **Linux / macOS**: `./detect-ide.sh`
+>
+> On Windows, IDE binaries (like `code`, `cursor`) are usually added to `PATH` automatically during installation. On Linux, IDEs installed via AppImage or Snap may not expose a `PATH` binary — install via your package manager instead.
 
 ### 3. Use in Claude Code
 
