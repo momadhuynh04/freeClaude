@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Dict, Tuple
 
 class ModelMapper:
@@ -37,8 +38,19 @@ class ModelMapper:
     def get_all(self) -> Dict[str, str]:
         return self.mappings
                 
-    # Keyword tiers to match against — order matters (most specific first)
+    # Keyword tiers to match against — order matters (most specific first).
+    # Claude Code requests contain opus/sonnet/haiku. OpenAI-family models
+    # (gpt-*/codex/o3/o4) are NOT tier-matched on purpose: they resolve via
+    # FAMILY_FALLBACKS so one 'codex' key covers the whole family, and only
+    # an exact per-model key (e.g. 'gpt-5.5') overrides a single model.
     KEYWORD_TIERS = ["opus", "sonnet", "haiku"]
+
+    # Family fallback: ANY model from these families routes through a single
+    # canonical key, so Codex switching models (gpt-5.6-sol, gpt-5.5, o4-mini…)
+    # never breaks routing — one 'codex' mapping covers the whole family.
+    FAMILY_FALLBACKS = [
+        (r"\b(gpt|codex|o[134])\b", "codex"),
+    ]
 
     def resolve(self, requested_model: str) -> Tuple[str, str]:
         """
@@ -47,7 +59,9 @@ class ModelMapper:
           1. Exact match against mapping keys.
           2. Keyword match: if requested model contains 'opus'/'sonnet'/'haiku',
              scan existing mapping keys for the same keyword and use that value.
-          3. Raise ValueError with a helpful message.
+          3. Family fallback: OpenAI-family models (gpt-*/codex/o3/o4) route
+             through the single 'codex' mapping key.
+          4. Raise ValueError with a helpful message.
         """
         # 1. Exact match
         target = self.mappings.get(requested_model)
@@ -65,6 +79,16 @@ class ModelMapper:
                                   f"keyword '{keyword}' matched key '{key}' → '{val}'")
                             break
                 if target:
+                    break
+
+        # 3. Family fallback — one key covers an entire model family
+        if not target:
+            model_lower = requested_model.lower()
+            for pattern, fallback_key in self.FAMILY_FALLBACKS:
+                if re.search(pattern, model_lower) and fallback_key in self.mappings:
+                    target = self.mappings[fallback_key]
+                    print(f"[⚡] No exact match for '{requested_model}', "
+                          f"family fallback → key '{fallback_key}' → '{target}'")
                     break
 
         if not target:

@@ -57,3 +57,33 @@ def test_model_mapper_resolve_invalid_format(temp_config):
     
     with pytest.raises(ValueError, match="Invalid mapping format"):
         mapper.resolve("bad-model")
+
+def test_model_mapper_family_fallback_gpt_models(temp_config):
+    """Any gpt-*/o3/o4 model routes through the single 'codex' key."""
+    mapper = ModelMapper(config_path=temp_config)
+    mapper.set_mapping("codex", "deepseekplatform/deepseek-v4-flash")
+
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.2", "o3", "o4-mini", "codex"]:
+        provider, target = mapper.resolve(model)
+        assert (provider, target) == ("deepseekplatform", "deepseek-v4-flash"), model
+
+def test_model_mapper_family_fallback_exact_match_wins(temp_config):
+    """An explicit per-model key takes priority over the family fallback."""
+    mapper = ModelMapper(config_path=temp_config)
+    mapper.set_mapping("codex", "deepseekplatform/default")
+    mapper.set_mapping("gpt-5.5", "openrouter/special-model")
+
+    provider, target = mapper.resolve("gpt-5.5")
+    assert (provider, target) == ("openrouter", "special-model")
+
+    # Other family members still fall back
+    provider, target = mapper.resolve("gpt-5.6-sol")
+    assert (provider, target) == ("deepseekplatform", "default")
+
+def test_model_mapper_family_fallback_requires_codex_key(temp_config):
+    """Without a 'codex' key, unknown gpt models still raise a helpful error."""
+    mapper = ModelMapper(config_path=temp_config)
+    mapper.set_mapping("opus", "openrouter/qwen/qwen-max")
+
+    with pytest.raises(ValueError, match="No mapping found"):
+        mapper.resolve("gpt-5.6-sol")

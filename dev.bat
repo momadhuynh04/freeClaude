@@ -8,21 +8,21 @@ echo =========================================
 echo.
 
 if not exist "venv\Scripts\activate.bat" (
-    echo [!] Khong tim thay venv! 
+    echo [!] Virtual environment not found (venv)!
     pause
     exit /b
 )
 
-echo [*] Khoi dong Backend Proxy (Port 8082)...
+echo [*] Starting Backend Proxy (Port 8082)...
 start "freeClaude Backend DEV" cmd /k "title Backend API & color 0a & call venv\Scripts\activate.bat & python -m cli.main"
 
-echo [*] Khoi dong Frontend Vite (Port 5173)...
+echo [*] Starting Frontend Vite (Port 5173)...
 start "freeClaude Frontend DEV" cmd /k "title Frontend UI & color 0d & cd webui && npm run dev"
 
-echo [*] Cho cac service len sóng...
+echo [*] Waiting for services to start...
 timeout /t 3 /nobreak > nul
 
-echo [*] Mo WebUI Dev...
+echo [*] Opening WebUI Dev...
 start http://localhost:5173
 
 echo.

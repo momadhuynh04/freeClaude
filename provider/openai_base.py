@@ -161,6 +161,12 @@ class OpenAIBaseProvider(BaseProvider):
             else:
                 body["reasoning_effort"] = "low"
 
+        # Direct passthrough for OpenAI-ingress clients (e.g. Codex via
+        # /v1/chat/completions) that send an explicit reasoning_effort.
+        effort = getattr(anthropic_request, "reasoning_effort", None)
+        if effort:
+            body["reasoning_effort"] = effort
+
         # Tool definitions
         if anthropic_request.tools:
             body["tools"] = _anthropic_tools_to_openai(anthropic_request.tools)

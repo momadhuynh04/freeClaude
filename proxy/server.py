@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from typing import Optional
+from typing import Dict, Literal, Optional
 import subprocess
 import urllib.parse
 import platform
@@ -17,8 +17,32 @@ import datetime
 import asyncio
 
 from models.anthropic import AnthropicRequest
+from models.openai_compat import OpenAIRequest, ResponsesRequest
 from proxy.router import provider_router
 from config.model_map import model_mapper
+from config.codex_config import setup_codex_config, persist_codex_env_var, get_codex_config_path, DEFAULT_BASE_URL as CODEX_BASE_URL
+from proxy.openai_ingress import (
+    openai_chat_to_anthropic,
+    anthropic_response_to_openai_chat,
+    anthropic_events_to_openai_stream,
+    openai_error_line,
+)
+from proxy.responses_ingress import (
+    responses_to_anthropic,
+    anthropic_response_to_responses_object,
+    anthropic_events_to_responses_stream,
+    has_native_tool_call,
+    stream_text,
+    stream_events,
+    response_text,
+    looks_like_action_narration,
+    AGENTIC_NUDGE,
+    _unwrap_additional_tools,
+)
+
+AGENTIC_RETRY_ATTEMPTS = 3
+
+PROXY_URL = "http://127.0.0.1:8082"
 
 IDE_DEFINITIONS = [
     {"id": "vscode", "name": "VS Code", "binary": "code", "config_dir": "Code", "supports_claude_extension": True},
@@ -95,11 +119,21 @@ def _safe_merge_json(filepath, updates):
             json.dump(data, f, indent=2)
     return changed
 
+def _proxy_env() -> dict:
+    """Environment variables injected into any launched CLI/IDE so both
+    Claude Code and Codex route through the proxy."""
+    return {
+        "ANTHROPIC_BASE_URL": PROXY_URL,
+        "ANTHROPIC_API_KEY": "freeClaude",
+        "OPENAI_BASE_URL": f"{PROXY_URL}/v1",
+        "FREECLAUDE_API_KEY": "freeClaude",
+    }
+
 def _setup_claude_env():
     claude_settings_path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
     return _safe_merge_json(claude_settings_path, {
         "env": {
-            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082",
+            "ANTHROPIC_BASE_URL": PROXY_URL,
             "ANTHROPIC_API_KEY": "freeClaude"
         }
     })
@@ -111,7 +145,11 @@ def _setup_ide_settings(config_dir):
     })
 
 def _launch_ide(binary, cwd):
-    subprocess.Popen([binary, "--new-window", cwd], start_new_session=True)
+    # Extend (not replace) the environment — GUI apps need PATH/DISPLAY/etc.,
+    # plus proxy vars so the Codex extension routes through the proxy.
+    env = os.environ.copy()
+    env.update(_proxy_env())
+    subprocess.Popen([binary, "--new-window", cwd], start_new_session=True, env=env)
 
 def _find_linux_terminal():
     terminals = [
@@ -126,8 +164,7 @@ def _find_linux_terminal():
 def _launch_terminal(cmd, cwd):
     system = platform.system()
     env = os.environ.copy()
-    env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8082"
-    env["ANTHROPIC_API_KEY"] = "freeClaude"
+    env.update(_proxy_env())
 
     if system == "Windows":
         import base64
@@ -214,6 +251,10 @@ async def ide_setup(request: IDESetupRequest):
     claude_changed = _setup_claude_env()
     results.append({"target": "claude_settings", "configured": claude_changed})
 
+    codex_changed = setup_codex_config()
+    persist_codex_env_var()
+    results.append({"target": "codex_config", "configured": codex_changed})
+
     detected = _detect_ides()
     for ide_def in IDE_DEFINITIONS:
         if ide_def["id"] in request.editors and ide_def["id"] in detected:
@@ -288,16 +329,121 @@ async def get_available_models():
         models_data["deepseekplatform"] = ["deepseek-chat", "deepseek-reasoner", "deepseek-coder"]
 
         
+    try:
+        from config.custom_providers import load_custom_providers as _load_cp
+        for _pid, _spec in _load_cp().items():
+            models_data[_pid] = [m.get("id") for m in (_spec.get("models") or []) if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        pass
+
     cached_available_models = models_data
     return models_data
+
+class CustomModelSpec(BaseModel):
+    id: str
+    name: str
+    reasoning: bool = False
+    image: bool = False
+
+class CustomProviderSpec(BaseModel):
+    id: str
+    display_name: str
+    provider_api: str
+    base_url: str
+    api_key: str
+    headers: Optional[Dict[str, str]] = None
+    models: list[CustomModelSpec]
+
+
+@app.get("/api/custom-providers")
+async def list_custom_providers():
+    from config.custom_providers import get_masked_providers
+    return {"providers": get_masked_providers()}
+
+
+@app.post("/api/custom-providers")
+async def create_custom_provider(request: CustomProviderSpec):
+    from config.custom_providers import load_custom_providers, save_custom_providers, normalize_api_key_input
+    raw_env = normalize_api_key_input(request.api_key)
+    if not raw_env.strip():
+        headers = request.headers or {}
+        has_headers = any(k.strip() and v.strip() for k, v in headers.items()) if isinstance(headers, dict) else False
+        if not has_headers:
+            raise HTTPException(status_code=400, detail="API key ENV var is required (or provide auth via headers)")
+    else:
+        try:
+            from config.custom_providers import validate_spec as _vs
+            _vs({"id": request.id, "display_name": request.display_name, "provider_api": request.provider_api, "base_url": request.base_url, "api_key_env": raw_env, "headers": request.headers, "models": [m.model_dump() for m in request.models]})
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+    spec = {
+        "id": request.id.strip().lower(),
+        "display_name": request.display_name.strip(),
+        "provider_api": request.provider_api,
+        "base_url": request.base_url.strip().rstrip("/"),
+        "api_key_env": raw_env,
+        "headers": request.headers or {},
+        "models": [m.model_dump() for m in request.models],
+    }
+    providers = load_custom_providers()
+    providers[spec["id"]] = spec
+    save_custom_providers(providers)
+    global cached_available_models
+    cached_available_models = {}
+    from config.custom_providers import get_masked_providers as _masked
+    masked = _masked()
+    return {"status": "success", "providers": masked}
+
+
+@app.delete("/api/custom-providers/{provider_id}")
+async def delete_custom_provider(provider_id: str):
+    from config.custom_providers import delete_provider, load_custom_providers, get_masked_providers
+    providers = load_custom_providers()
+    if provider_id not in providers:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
+    orphaned = [k for k, v in model_mapper.get_all().items() if v.startswith(f"{provider_id}/")]
+    delete_provider(provider_id)
+    global cached_available_models
+    cached_available_models = {}
+    return {"status": "success", "providers": get_masked_providers(), "orphaned_mappings": orphaned}
+
+
+@app.get("/api/custom-providers/{provider_id}/models")
+async def fetch_custom_provider_models(provider_id: str):
+    import os as _os
+    from config.custom_providers import load_custom_providers
+    spec = load_custom_providers().get(provider_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
+    api_key = _os.environ.get(spec.get("api_key_env", ""), "") if spec.get("api_key_env") else ""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if spec.get("headers"):
+        headers.update(spec["headers"])
+    base = spec.get("base_url", "").rstrip("/")
+    candidates = [f"{base}/models", f"{base}/v1/models"] if not base.endswith("/models") else [base]
+    for url in candidates:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, headers=headers, timeout=5.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data.get("data"), list):
+                        ids = [m.get("id") for m in data["data"] if isinstance(m, dict) and m.get("id")]
+                        return {"ids": ids}
+                    if isinstance(data, list):
+                        return {"ids": [str(x) for x in data]}
+        except Exception:
+            continue
+    return {"ids": []}
+
 
 @app.post("/api/models")
 async def update_model(request: ModelMappingRequest):
     model_mapper.set_mapping(request.source_model, request.target)
     return {"status": "success", "mappings": model_mapper.get_all()}
 
-@app.post("/api/launch")
-async def launch_claude(request: LaunchRequest):
+def _resolve_launch(request: LaunchRequest, cli_cmd: str):
+    """Resolve a LaunchRequest to (shell_command, working_directory)."""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     target_cwd = base_dir
 
@@ -314,17 +460,83 @@ async def launch_claude(request: LaunchRequest):
         repo_path = os.path.join(projects_dir, repo_name)
 
         if os.path.exists(repo_path):
-            cmd = f'cd "{repo_path}" && claude'
+            cmd = f'cd "{repo_path}" && {cli_cmd}'
         else:
-            cmd = f'cd "{projects_dir}" && git clone {request.repo_url} && cd "{repo_name}" && claude'
+            cmd = f'cd "{projects_dir}" && git clone {request.repo_url} && cd "{repo_name}" && {cli_cmd}'
     else:
         if request.path and os.path.isdir(request.path):
             target_cwd = request.path
-        cmd = "claude"
+        cmd = cli_cmd
+
+    return cmd, target_cwd
+
+@app.post("/api/launch")
+async def launch_claude(request: LaunchRequest):
+    cmd, target_cwd = _resolve_launch(request, "claude")
 
     try:
         _launch_terminal(cmd, target_cwd)
         return {"status": "success", "message": "Launched Claude Code!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# Codex CLI support (OpenAI-native clients via /v1/chat/completions)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/codex-detect")
+async def codex_detect():
+    detected = {}
+    binary_path = shutil.which("codex")
+    if binary_path:
+        version = ""
+        try:
+            result = subprocess.run([binary_path, "--version"], capture_output=True, text=True, timeout=10)
+            version = result.stdout.strip().split("\n")[0] if result.returncode == 0 else ""
+        except Exception:
+            pass
+        detected = {
+            "binary": binary_path,
+            "version": version,
+            "name": "Codex CLI",
+            "last_detected": datetime.datetime.now().isoformat()
+        }
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+        data["codex_cli_detected"] = detected
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    return {"detected": detected}
+
+class CodexSetupRequest(BaseModel):
+    base_url: Optional[str] = None
+
+@app.post("/api/codex-setup")
+async def codex_setup(request: Optional[CodexSetupRequest] = None):
+    base_url = (request.base_url if request and request.base_url else CODEX_BASE_URL)
+    changed = setup_codex_config(base_url=base_url)
+    persisted = persist_codex_env_var()
+    return {
+        "status": "success",
+        "configured": changed,
+        "config_path": get_codex_config_path(),
+        "base_url": base_url,
+        "env_persisted": persisted
+    }
+
+@app.post("/api/codex-launch")
+async def codex_launch(request: LaunchRequest):
+    cmd, target_cwd = _resolve_launch(request, "codex")
+
+    try:
+        _launch_terminal(cmd, target_cwd)
+        return {"status": "success", "message": "Launched Codex!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -399,7 +611,7 @@ print(filedialog.askdirectory(parent=root, title="Select Project Folder"))
 
 @app.post("/v1/messages")
 async def handle_messages(request: AnthropicRequest):
-    print(f"\n[🚀] Nhận request từ Claude Code cho model: {request.model}")
+    print(f"\n[🚀] Received request from Claude Code for model: {request.model}")
     try:
         provider = provider_router.get_provider(request.model)
         
@@ -444,6 +656,169 @@ async def handle_messages(request: AnthropicRequest):
         return JSONResponse(
             status_code=500,
             content={"type": "error", "error": {"type": "api_error", "message": error_msg}}
+        )
+
+@app.post("/v1/chat/completions")
+async def handle_chat_completions(request: OpenAIRequest):
+    print(f"\n[🤖] Received request from OpenAI-compatible client (Codex) for model: {request.model}")
+    try:
+        anthropic_request = openai_chat_to_anthropic(request)
+        provider = provider_router.get_provider(anthropic_request.model)
+
+        provider_request_body = await provider.translate_request(anthropic_request)
+
+        if request.stream:
+            async def event_generator():
+                try:
+                    async for line in anthropic_events_to_openai_stream(
+                        provider.stream(provider_request_body), request.model
+                    ):
+                        yield line
+                except httpx.HTTPStatusError as e:
+                    error_detail = e.response.text if hasattr(e, 'response') else str(e)
+                    error_msg = f"Provider API Error {e.response.status_code}: {error_detail}"
+                    print(f"[❌] {error_msg}")
+                    yield openai_error_line(error_msg)
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[❌] {e}")
+                    yield openai_error_line(str(e))
+                    yield "data: [DONE]\n\n"
+
+            return StreamingResponse(event_generator(), media_type="text/event-stream")
+        else:
+            response = await provider.generate(provider_request_body)
+            return anthropic_response_to_openai_chat(response, request.model)
+
+    except httpx.HTTPStatusError as e:
+        error_detail = e.response.text if hasattr(e, 'response') else str(e)
+        error_msg = f"Provider API Error {e.response.status_code}: {error_detail}"
+        print(f"[❌] {error_msg}")
+        return JSONResponse(
+            status_code=e.response.status_code,
+            content={"error": {"message": error_msg, "type": "api_error", "code": None}}
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(e), "type": "api_error", "code": None}}
+        )
+
+@app.post("/v1/responses")
+async def handle_responses(request: ResponsesRequest):
+    """OpenAI Responses API — native ingress for Codex CLI / Codex VS Code extension."""
+    print(f"\n[🤖] Received Responses API request from Codex for model: {request.model}")
+    try:
+        raw_tools: list = []
+        raw_tools.extend(request.tools or [])
+        if getattr(request, "additional_tools", None):
+            raw_tools.extend(request.additional_tools or [])
+        extra = getattr(request, "__pydantic_extra__", None) or {}
+        if extra.get("additional_tools"):
+            raw_tools.extend(extra["additional_tools"] or [])
+        if isinstance(request.input, list):
+            for _item in request.input:
+                if isinstance(_item, dict) and _item.get("type") == "additional_tools":
+                    raw_tools.extend(_item.get("tools", []) or [])
+        flat_tools = _unwrap_additional_tools(raw_tools)
+        tool_schemas = {
+            t.get("name"): (t.get("parameters") or t.get("input_schema") or {})
+            for t in flat_tools
+            if isinstance(t, dict) and t.get("name")
+        }
+        if flat_tools:
+            print(f"[🔧] Codex tools unwrapped: {list(tool_schemas.keys())}")
+        anthropic_request = responses_to_anthropic(request)
+        provider = provider_router.get_provider(anthropic_request.model)
+
+        provider_request_body = await provider.translate_request(anthropic_request)
+
+        if request.stream:
+            async def event_generator():
+                nonlocal provider_request_body
+                for attempt in range(AGENTIC_RETRY_ATTEMPTS):
+                    events_buffer = []
+                    try:
+                        async for ev in provider.stream(provider_request_body):
+                            events_buffer.append(ev)
+                    except httpx.HTTPStatusError as e:
+                        error_detail = e.response.text if hasattr(e, 'response') else str(e)
+                        error_msg = f"Provider API Error {e.response.status_code}: {error_detail}"
+                        print(f"[❌] {error_msg}")
+                        yield f'event: response.failed\ndata: {json.dumps({"type": "response.failed", "response": {"error": {"code": "api_error", "message": error_msg}}})}\n\n'
+                        return
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                        print(f"[❌] {e}")
+                        yield f'event: response.failed\ndata: {json.dumps({"type": "response.failed", "response": {"error": {"code": "api_error", "message": str(e)}}})}\n\n'
+                        return
+
+                    text = stream_text(events_buffer)
+                    saw_stop = any(
+                        ev.data.get("type") == "message_stop" for ev in events_buffer
+                    )
+                    premature_cut = not events_buffer or not saw_stop
+                    narrated = (
+                        tool_schemas
+                        and not has_native_tool_call(events_buffer)
+                        and looks_like_action_narration(text)
+                    )
+
+                    if (not narrated and not premature_cut) or attempt == AGENTIC_RETRY_ATTEMPTS - 1:
+                        if premature_cut:
+                            print(f"[⚠️] Upstream stream ended prematurely (no message_stop) after {attempt + 1} attempt(s)")
+                        print(f"[🔁] Attempt {attempt + 1}/{AGENTIC_RETRY_ATTEMPTS}")
+                        async for line in anthropic_events_to_responses_stream(
+                            stream_events(events_buffer), request.model, tool_schemas
+                        ):
+                            yield line
+                        return
+
+                    # Narration instead of action, or a cut stream — retry.
+                    reason = "premature stream cut" if premature_cut else "narration without tool call"
+                    print(f"[🔁] {reason}, retrying ({attempt + 1}/{AGENTIC_RETRY_ATTEMPTS})")
+                    anthropic_request.system = (
+                        (anthropic_request.system or "") + "\n\n" + AGENTIC_NUDGE
+                    ).strip()
+                    provider_request_body = await provider.translate_request(anthropic_request)
+
+            return StreamingResponse(event_generator(), media_type="text/event-stream")
+        else:
+            for attempt in range(AGENTIC_RETRY_ATTEMPTS):
+                response = await provider.generate(provider_request_body)
+                narrated = (
+                    tool_schemas
+                    and not any(b.get("type") == "tool_use" for b in response.content)
+                    and looks_like_action_narration(response_text(response))
+                )
+                if not narrated or attempt == AGENTIC_RETRY_ATTEMPTS - 1:
+                    return anthropic_response_to_responses_object(response, request.model, tool_schemas)
+
+                print(f"[🔁] Model narrated instead of calling a tool, retrying ({attempt + 1}/{AGENTIC_RETRY_ATTEMPTS})")
+                anthropic_request.system = (
+                    (anthropic_request.system or "") + "\n\n" + AGENTIC_NUDGE
+                ).strip()
+                provider_request_body = await provider.translate_request(anthropic_request)
+
+    except httpx.HTTPStatusError as e:
+        error_detail = e.response.text if hasattr(e, 'response') else str(e)
+        error_msg = f"Provider API Error {e.response.status_code}: {error_detail}"
+        print(f"[❌] {error_msg}")
+        return JSONResponse(
+            status_code=e.response.status_code,
+            content={"error": {"message": error_msg, "type": "api_error", "code": None}}
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(e), "type": "api_error", "code": None}}
         )
 
 @app.api_route("/api/hello", methods=["GET", "HEAD"])

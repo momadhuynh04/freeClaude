@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import CustomProviderModal from './CustomProviderModal'
 
 function SearchableDropdown({ options, value, onChange, placeholder }: { options: string[], value: string, onChange: (val: string) => void, placeholder: string }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -88,11 +89,15 @@ function App() {
 
   const [ideList, setIdeList] = useState<Record<string, { name: string; version: string; binary: string; supports_claude_extension: boolean }>>({});
 
+  const [codexInfo, setCodexInfo] = useState<{ name: string; version: string } | null>(null);
+
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({
     openrouter: [],
     deepseekplatform: []
   });
   const [isLoadingModels, setIsLoadingModels] = useState(true);
+  const [customProviders, setCustomProviders] = useState<Record<string, any>>({});
+  const [showCustomModal, setShowCustomModal] = useState(false);
 
   const fetchMappings = () => {
     fetch('/api/models')
@@ -109,6 +114,22 @@ function App() {
       .then(r => r.json())
       .then(d => setIdeList(d.detected || {}))
       .catch(() => {});
+
+    fetch('/api/codex-detect')
+      .then(r => r.json())
+      .then(d => setCodexInfo(d.detected?.binary ? d.detected : null))
+      .catch(() => {});
+  }, []);
+
+  const fetchCustomProviders = () => {
+    fetch('/api/custom-providers')
+      .then(r => r.json())
+      .then(d => setCustomProviders(d.providers || {}))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchCustomProviders();
   }, []);
 
   useEffect(() => {
@@ -148,13 +169,21 @@ function App() {
   const launchClaude = async () => {
     setIsLaunching(true);
 
-    if (launchTarget === 'terminal') {
+    if (launchTarget === 'terminal' || launchTarget === 'codex') {
+      const endpoint = launchTarget === 'codex' ? '/api/codex-launch' : '/api/launch';
       const payload = {
         path: launchMode === 'local' ? localPath : null,
         repo_url: launchMode === 'git' ? repoUrl : null
       };
       try {
-        await fetch('/api/launch', {
+        if (launchTarget === 'codex') {
+          await fetch('/api/codex-setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+        }
+        await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -211,7 +240,7 @@ function App() {
             >
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="square" strokeLinejoin="miter" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                CLAUDE LAUNCHER
+                AGENT LAUNCHER
               </div>
             </button>
           </div>
@@ -219,10 +248,13 @@ function App() {
           {/* TAB CONTENT: ROUTING */}
           {activeTab === 'routing' && (
             <div className="pixel-card p-6 mb-8">
-              <h2 className="text-sm font-pixel text-provider-400 mb-6 flex items-center gap-3">
-                <span className="pixel-border-provider px-2 py-1 text-[10px] text-provider-300">◈</span>
-                ACTIVE MODEL ROUTES
-              </h2>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-sm font-pixel text-provider-400 flex items-center gap-3">
+                  <span className="pixel-border-provider px-2 py-1 text-[10px] text-provider-300">◈</span>
+                  ACTIVE MODEL ROUTES
+                </h2>
+                <button onClick={() => setShowCustomModal(true)} className="pixel-btn text-[7px] px-3 py-2">+ ADD CUSTOM PROVIDER</button>
+              </div>
               
               <div className="space-y-2 mb-8">
                 {Object.entries(mappings).map(([src, tgt]) => (
@@ -248,7 +280,7 @@ function App() {
                 
                 <div className="flex flex-col lg:flex-row gap-4">
                   <div className="flex-1">
-                    <label className="block text-[7px] font-pixel text-claude-500 mb-2">CLAUDE MODEL</label>
+                    <label className="block text-[7px] font-pixel text-claude-500 mb-2">SOURCE MODEL</label>
                     <select 
                       value={sourceModel}
                       onChange={e => setSourceModel(e.target.value)}
@@ -258,6 +290,7 @@ function App() {
                       <option value="opus">OPUS</option>
                       <option value="sonnet">SONNET</option>
                       <option value="haiku">HAIKU</option>
+                      <option value="codex">CODEX</option>
                     </select>
                   </div>
 
@@ -276,6 +309,9 @@ function App() {
                     >
                       <option value="openrouter">OPENROUTER</option>
                       <option value="deepseekplatform">DEEPSEEK</option>
+                      {Object.keys(customProviders).map(id => (
+                        <option key={id} value={id}>{customProviders[id].display_name?.toUpperCase() || id.toUpperCase()}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -314,10 +350,10 @@ function App() {
             <div className="pixel-card p-6 mb-8">
               <h2 className="text-sm font-pixel text-claude-500 mb-3 flex items-center gap-3" style={{ textShadow: '3px 3px 0 #8b4513' }}>
                 <span className="pixel-border-claude px-2 py-1 text-[10px] text-claude-400">★</span>
-                CLAUDE CODE LAUNCHER
+                AGENT LAUNCHER
               </h2>
               <p className="text-moss-400 text-[7px] mb-6 max-w-2xl leading-relaxed">
-                Launch Claude Code directly with <code className="text-claude-500 bg-moss-950 px-1">ANTHROPIC_BASE_URL</code> and API keys pre-configured. Open your existing local projects or automatically clone a Git repository to start coding immediately.
+                Launch Claude Code or Codex directly with proxy env pre-configured (<code className="text-claude-500 bg-moss-950 px-1">ANTHROPIC_BASE_URL</code> for Claude Code, <code className="text-claude-500 bg-moss-950 px-1">~/.codex/config.toml</code> for Codex). Open your existing local projects or automatically clone a Git repository to start coding immediately.
               </p>
 
               <div className="bg-moss-950 p-2 mb-5 border-4 border-moss-700 inline-flex flex-wrap gap-1">
@@ -326,6 +362,13 @@ function App() {
                   className={`px-4 py-2 font-pixel text-[8px] border-4 transition-none ${launchTarget === 'terminal' ? 'bg-moss-800 border-moss-500 text-moss-200' : 'bg-moss-950 border-transparent text-moss-500 hover:text-moss-300'}`}
                 >
                   TERMINAL
+                </button>
+                <button 
+                  onClick={() => setLaunchTarget('codex')}
+                  title={codexInfo ? `${codexInfo.name} ${codexInfo.version} detected — auto-writes ~/.codex/config.toml` : 'Codex CLI not found in PATH — install with `npm install -g @openai/codex`'}
+                  className={`px-4 py-2 font-pixel text-[8px] border-4 transition-none ${launchTarget === 'codex' ? 'bg-moss-800 border-moss-500 text-moss-200' : 'bg-moss-950 border-transparent text-moss-500 hover:text-moss-300'} ${!codexInfo ? 'opacity-60' : ''}`}
+                >
+                  {codexInfo ? 'CODEX' : 'CODEX *'}
                 </button>
                 {Object.entries(ideList).map(([id, info]) => (
                   <button 
@@ -339,7 +382,7 @@ function App() {
                 ))}
               </div>
 
-              {launchTarget === 'terminal' && (
+              {(launchTarget === 'terminal' || launchTarget === 'codex') && (
                 <div className="bg-moss-950 p-2 mb-5 border-4 border-moss-700 inline-flex">
                   <button 
                     onClick={() => setLaunchMode('local')}
@@ -357,7 +400,7 @@ function App() {
               )}
 
               <div className="bg-moss-950 p-6 pixel-border max-w-3xl">
-                {launchTarget === 'terminal' && launchMode === 'git' ? (
+                {(launchTarget === 'terminal' || launchTarget === 'codex') && launchMode === 'git' ? (
                   <div>
                     <label className="block text-[8px] font-pixel text-claude-500 mb-3">
                       GIT REPOSITORY URL
@@ -371,7 +414,7 @@ function App() {
                     />
                     <p className="text-[7px] text-moss-500 mb-5 mt-2 flex items-center gap-2">
                       <svg className="w-3 h-3 text-moss-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="square" strokeLinejoin="miter" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      Repo will be cloned to freeClaude/projects/ and Claude will open automatically.
+                      Repo will be cloned to freeClaude/projects/ and the agent will open automatically.
                     </p>
                   </div>
                 ) : (
@@ -404,14 +447,14 @@ function App() {
                     </div>
                     <p className="text-[7px] text-moss-500 mb-5 mt-2 flex items-center gap-2">
                       <svg className="w-3 h-3 text-moss-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="square" strokeLinejoin="miter" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      {launchTarget === 'terminal' ? 'A new terminal window will open at this location with Claude loaded.' : ideList[launchTarget]?.supports_claude_extension ? `${ideList[launchTarget]?.name || 'IDE'} will open with Claude Code pre-configured.` : `${ideList[launchTarget]?.name || 'IDE'} will open. Use the built-in terminal and run \`claude\` — proxy env is already configured.`}
+                      {launchTarget === 'terminal' ? 'A new terminal window will open at this location with Claude loaded.' : launchTarget === 'codex' ? 'Writes ~/.codex/config.toml, then a new terminal window opens at this location with Codex routed through the proxy.' : ideList[launchTarget]?.supports_claude_extension ? `${ideList[launchTarget]?.name || 'IDE'} will open with Claude Code + Codex pre-configured.` : `${ideList[launchTarget]?.name || 'IDE'} will open. Use the built-in terminal and run \`claude\` — proxy env is already configured.`}
                     </p>
                   </div>
                 )}
 
                 <button 
                   onClick={launchClaude}
-                  disabled={isLaunching || (launchTarget === 'terminal' && launchMode === 'git' && !repoUrl)}
+                  disabled={isLaunching || ((launchTarget === 'terminal' || launchTarget === 'codex') && launchMode === 'git' && !repoUrl)}
                   className="w-full sm:w-auto flex items-center justify-center gap-3 pixel-btn-claude text-[10px] py-4 px-8"
                 >
                   {isLaunching ? (
@@ -421,7 +464,7 @@ function App() {
                     </>
                   ) : (
                     <>
-                      {launchTarget === 'terminal' ? 'LAUNCH CLAUDE CODE' : `LAUNCH IN ${ideList[launchTarget]?.name?.toUpperCase() || 'IDE'}`}
+                      {launchTarget === 'codex' ? 'LAUNCH CODEX' : launchTarget === 'terminal' ? 'LAUNCH CLAUDE CODE' : `LAUNCH IN ${ideList[launchTarget]?.name?.toUpperCase() || 'IDE'}`}
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="square" strokeLinejoin="miter" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                     </>
                   )}
@@ -431,6 +474,16 @@ function App() {
           )}
         </div>
       </div>
+
+      {showCustomModal && <CustomProviderModal
+        customProviders={customProviders}
+        onClose={() => setShowCustomModal(false)}
+        onSaved={() => {
+          setShowCustomModal(false);
+          fetchCustomProviders();
+          fetch('/api/available-models').then(r=>r.json()).then(d=>setAvailableModels(d)).catch(()=>{});
+        }}
+      />}
 
       {/* Footer */}
       <footer className="bg-moss-900 border-t-4 border-moss-700 py-4 px-6 flex-shrink-0">

@@ -8,30 +8,30 @@ echo =========================================
 echo.
 
 if not exist "venv\Scripts\activate.bat" (
-    echo [!] Khong tim thay moi truong ao venv! 
-    echo [!] Vui long chay: python -m venv venv va cai dat dependencies truoc.
+    echo [!] Virtual environment not found (venv)!
+    echo [!] Please run: python -m venv venv and install dependencies first.
     pause
     exit /b
 )
 
-echo [*] Kich hoat moi truong ao Python (venv)...
+echo [*] Activating Python virtual environment (venv)...
 call venv\Scripts\activate.bat
 
-echo [*] Khoi dong Proxy Server (FastAPI)...
+echo [*] Starting Proxy Server (FastAPI)...
 :: Mo mot cua so terminal rieng de chay server cho gon
 start "freeClaude Proxy Server" cmd /k "title freeClaude Proxy & color 0a & python -m cli.main"
 
-echo [*] Cho Server khoi dong...
+echo [*] Waiting for server to start...
 timeout /t 2 /nobreak > nul
 
-echo [*] Mo trinh duyet WebUI...
+echo [*] Opening WebUI in browser...
 start http://127.0.0.1:8082
 
 echo.
 echo =========================================
-echo [OK] freeClaude da duoc chay thanh cong!
+echo [OK] freeClaude is running successfully!
 echo =========================================
-echo - De tat server, hay dong cua so "freeClaude Proxy Server".
-echo - Ban co the dong cua so hien tai ngay bay gio.
+echo - To stop the server, close the "freeClaude Proxy Server" window.
+echo - You can close this window now.
 echo.
 pause
