@@ -14,7 +14,7 @@ import os
 import platform
 import subprocess
 import tomllib
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 FREECLAUDE_PROVIDER_ID = "freeclaude"
 API_KEY_ENV = "FREECLAUDE_API_KEY"
